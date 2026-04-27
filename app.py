@@ -1,223 +1,378 @@
 import streamlit as st
-from PIL import Image
-import numpy as np
-import cv2
-import datetime
-import pandas as pd
-import os
+import time
+import random
 import base64
+from PIL import Image
+import os
+import glob
+import database as db
+import image_utils as iu
+from fpdf import FPDF
+import tempfile
+from transformers import pipeline
 
-# --- 1. PREMIUM PLATFORM CONFIGURATION & CENTER-FORCE CSS ---
-st.set_page_config(page_title="Epidermix | Clinical Intelligence", layout="wide")
 
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800&family=Playfair+Display:ital,wght@1,700&display=swap');
+try:
+    page_icon_img = Image.open("d:/Study/A/epidermix/assets/logo.png")
+except Exception:
+    page_icon_img = None
 
-    /* Force background to white and text to navy to block Streamlit Dark Mode */
-    .stApp { 
-        background-color: #ffffff !important; 
-        color: #0f172a !important; 
-    }
+st.set_page_config(
+    page_title="Epidermix - Skin Analysis AI",
+    page_icon=page_icon_img,
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-    /* Full-bleed hero reset */
-    .block-container {
-        padding-top: 0rem !important;
-        padding-bottom: 0rem !important;
-        padding-left: 0rem !important;
-        padding-right: 0rem !important;
-    }
+# Initialize Session State
+if "user" not in st.session_state:
+    st.session_state.user = "Guest"
+if "page" not in st.session_state:
+    st.session_state.page = "Home"
 
-    /* Centered Pink Hero Section */
-    .hero-rect {
-        background-color: #fce4ec !important; 
-        width: 100vw;
-        height: 50vh; 
-        position: relative; 
-        display: flex;
-        justify-content: center;
-        align-items: center;     
-        margin: 0 !important;
-        overflow: hidden;
-    }
+def navigate_to(page_name):
+    st.session_state.page = page_name
 
-    .logo-img {
-        max-height: 95% !important; 
-        width: auto;
-        display: block;
-        object-fit: contain;
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%); 
-    }
+def logout():
+    st.session_state.user = "Guest"
+    st.rerun()
 
-    .content-wrapper {
-        padding: 4rem 6rem;
-    }
+def get_base64_of_bin_file(bin_file):
+    with open(bin_file, 'rb') as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
 
-    /* THE BRUTE FORCE CENTER FIX: Targeting the vertical block container */
-    [data-testid="stVerticalBlock"] > div:has(div.stButton) {
-        display: flex !important;
-        justify-content: center !important;
-        align-items: center !important;
-        width: 100% !important;
-    }
+def get_image_path(pattern):
+    files = glob.glob(f"d:/Study/A/epidermix/assets/{pattern}*.png")
+    if not files:
+        files = glob.glob(f"assets/{pattern}*.png")
+    return files[0] if files else ""
 
-    .stButton {
-        display: flex !important;
-        justify-content: center !important;
-        width: 100% !important;
-    }
-
-    .stButton > button {
-        background: #002147 !important;
-        color: white !important;
-        border-radius: 60px;
-        padding: 22px 65px;
-        font-weight: 700;
-        border: none;
-        width: auto !important;
-        min-width: 400px;
-        font-size: 1.3rem;
-        transition: all 0.3s ease;
-    }
+def generate_pdf_report(username, diagnosis, confidence, severity, desc, rec):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=16, style='B')
+    pdf.cell(200, 10, txt="EPIDERMIX AI - Skin Analysis Report", ln=1, align='C')
+    pdf.set_font("Helvetica", size=12)
+    pdf.cell(200, 10, txt=f"Patient/User: {username}", ln=1)
+    pdf.cell(200, 10, txt=f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}", ln=1)
+    pdf.cell(200, 10, txt="", ln=1)
+    pdf.set_font("Helvetica", size=14, style='B')
+    pdf.cell(200, 10, txt=f"Diagnosis: {diagnosis}", ln=1)
+    pdf.set_font("Helvetica", size=12)
+    pdf.cell(200, 10, txt=f"Confidence Level: {confidence}%", ln=1)
+    pdf.cell(200, 10, txt=f"Severity: {severity}", ln=1)
+    pdf.multi_cell(0, 10, txt=f"Description: {desc}")
+    pdf.cell(200, 5, txt="", ln=1)
+    pdf.multi_cell(0, 10, txt=f"Recommendation: {rec}")
     
-    .stButton > button:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 10px 20px rgba(0,33,71,0.2);
+    temp_dir = tempfile.gettempdir()
+    pdf_path = os.path.join(temp_dir, "epidermix_report.pdf")
+    pdf.output(pdf_path)
+    return pdf_path
+
+label_map = {
+    'benign_keratosis-like_lesions': {
+        "severity": "Low",
+        "description": "A non-cancerous skin growth that may look like a wart, seborrheic keratosis, or solar lentigo.",
+        "recommendation": "Generally harmless, but monitor for changes and wear sunscreen.",
+        "status": "success"
+    },
+    'basal_cell_carcinoma': {
+        "severity": "High",
+        "description": "A type of skin cancer that begins in the basal cells, often associated with cumulative sun exposure.",
+        "recommendation": "URGENT: Please consult a dermatologist for excision and treatment.",
+        "status": "danger"
+    },
+    'actinic_keratoses': {
+        "severity": "Moderate",
+        "description": "A rough, scaly patch on the skin that develops from years of sun exposure. This is considered precancerous.",
+        "recommendation": "Consult a doctor for evaluation as it may evolve into squamous cell carcinoma.",
+        "status": "warning"
+    },
+    'vascular_lesions': {
+        "severity": "Low to Moderate",
+        "description": "Abnormalities in blood vessels under the skin surface, indicating cherry angiomas, angiokeratomas, or pyogenic granulomas.",
+        "recommendation": "Usually benign. Seek medical advice if it bleeds or grows rapidly.",
+        "status": "warning"
+    },
+    'melanocytic_Nevi': {
+        "severity": "Low",
+        "description": "Commonly known as moles. These are standard benign melanocytic proliferations.",
+        "recommendation": "Continue with your regular skin care routine and monitor for the ABCDE signs of melanoma.",
+        "status": "success"
+    },
+    'melanoma': {
+        "severity": "High",
+        "description": "A very serious and highly aggressive type of skin cancer that develops in melanocytes. Early detection is critical.",
+        "recommendation": "URGENT: Please consult a dermatologist immediately for a professional biopsy. Do not wait.",
+        "status": "danger"
+    },
+    'dermatofibroma': {
+        "severity": "Low",
+        "description": "A common benign fibrous nodule usually found on the lower legs, often resulting from a minor injury like a bug bite.",
+        "recommendation": "Harmless and does not require treatment unless symptomatic or bothersome.",
+        "status": "success"
+    }
+}
+
+@st.cache_resource
+def load_hf_model():
+    return pipeline("image-classification", model="Anwarkh1/Skin_Cancer-Image_Classification")
+
+def analyse_skin_image(image):
+    st.info("Initiating local scan using Vision Transformer Neural Network. (First run downloads weights)...")
+    
+    try:
+        classifier = load_hf_model()
+        results = classifier(image)
+        
+        best_prediction = results[0]
+        label = best_prediction["label"]
+        score = best_prediction["score"]
+        
+        mapping = label_map.get(label, {
+            "severity": "Unknown",
+            "description": "Unrecognized condition.",
+            "recommendation": "Seek professional medical help.",
+            "status": "warning"
+        })
+        
+        st.success("Analysis Complete!")
+        
+        display_label = label.replace("_", " ").title()
+        
+        return {
+            "diagnosis": display_label,
+            "confidence": round(score * 100, 2),
+            "severity": mapping["severity"],
+            "description": mapping["description"],
+            "recommendation": mapping["recommendation"],
+            "status": mapping["status"]
+        }
+            
+    except Exception as e:
+        st.error(f"Error executing AI visual core: {str(e)}")
+        return get_fallback_diagnosis()
+
+def get_fallback_diagnosis():
+    return {
+        "diagnosis": "System Error (Fallback)",
+        "confidence": 0,
+        "severity": "Unknown",
+        "description": "The AI vision service is currently unreachable.",
+        "recommendation": "Please try again later when the connection is restored.",
+        "status": "warning"
     }
 
-    /* Ritual Cards Styling */
-    .tip-container {
-        position: relative;
-        width: 100%;
-        height: 420px;
-        overflow: hidden;
-        border-radius: 28px;
-        margin-bottom: 35px;
-        box-shadow: 0 15px 40px rgba(0,0,0,0.06);
-    }
-    .tip-image {
-        width: 100%; height: 100%;
-        object-fit: cover;
-        transition: transform 0.7s, filter 0.7s;
-    }
-    .tip-overlay {
-        position: absolute;
-        top: 0; left: 0;
-        width: 100%; height: 100%;
-        background: rgba(0, 33, 71, 0.9); 
-        color: white;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        padding: 40px;
-        text-align: center;
-        opacity: 0;
-        transition: opacity 0.5s;
-        backdrop-filter: blur(5px);
-    }
-    .tip-container:hover .tip-image { filter: blur(15px); transform: scale(1.08); }
-    .tip-container:hover .tip-overlay { opacity: 1; }
-    </style>
-    """, unsafe_allow_html=True)
 
-# Helper function for local images
-def get_base64_img(path):
-    if os.path.exists(path):
-        with open(path, "rb") as f:
-            encoded = base64.b64encode(f.read()).decode()
-            ext = path.split('.')[-1].lower()
-            mime = "image/png" if ext == "png" else "image/jpeg"
-            return f"data:{mime};base64,{encoded}"
-    return ""
+def render_sidebar():
+    with st.sidebar:
+        st.header("Member Portal")
+        if st.session_state.user == "Guest":
+            st.write("Please log in to track your analysis history.")
+            tab1, tab2 = st.tabs(["Login", "Register"])
+            with tab1:
+                l_user = st.text_input("Username", key="log_user")
+                l_pass = st.text_input("Password", type="password", key="log_pass")
+                if st.button("LOGIN", use_container_width=True):
+                    if db.authenticate_user(l_user, l_pass):
+                        st.session_state.user = l_user
+                        st.success("Authenticated!")
+                        st.rerun()
+                    else:
+                        st.error("Invalid credentials.")
+            with tab2:
+                r_user = st.text_input("New Username", key="reg_user")
+                r_pass = st.text_input("New Password", type="password", key="reg_pass")
+                if st.button("REGISTER", use_container_width=True):
+                    if db.register_user(r_user, r_pass):
+                        st.success("Registered successfully! Please log in.")
+                    else:
+                        st.error("Username already exists.")
+        else:
+            st.write(f"**Logged in as: {st.session_state.user}**")
+            if st.button("LOGOUT", use_container_width=True):
+                logout()
+                
+            st.markdown("---")
+            st.subheader("Past Scans Database")
+            scans = db.get_user_scans(st.session_state.user)
+            if not scans:
+                st.info("No past scans detected.")
+            else:
+                for s in scans:
+                    with st.expander(f"{s['timestamp']} | {s['diagnosis']}"):
+                        st.write(f"**Confidence:** {s['confidence']}%")
+                        st.write(f"**Severity:** {s['severity']}")
 
-# --- 2. STATE MANAGEMENT ---
-if 'page' not in st.session_state:
-    st.session_state.page = 'home'
+def render_banner():
+    try:
+        logo_b64 = get_base64_of_bin_file("d:/Study/A/epidermix/assets/logo.png")
+        logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="width: 200px; margin-right: 60px;" />'
+    except Exception:
+        logo_html = '''<div style="margin-right: 60px; width: 200px;"><svg viewBox="0 0 100 100" fill="none" stroke="#111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M60 20 L20 50 L40 80 L70 50 Z" /><circle cx="60" cy="20" r="5" fill="#111" /><circle cx="20" cy="50" r="5" fill="#111" /><circle cx="40" cy="80" r="5" fill="#111" /><circle cx="70" cy="50" r="5" fill="#111" /><path d="M40 50 L60 20 M40 50 L20 50 M40 50 L40 80 M40 50 L70 50" stroke-width="1" /><circle cx="40" cy="50" r="3" fill="#111" /><path d="M70 50 C 90 50, 90 90, 60 90 L30 90" /><rect x="25" y="65" width="20" height="8" rx="2" /></svg></div>'''
 
-# --- 3. HOME PAGE ---
-if st.session_state.page == 'home':
-    logo_data = get_base64_img("logo.png")
-    if logo_data:
-        st.markdown(f'<div class="hero-rect"><img src="{logo_data}" class="logo-img"></div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="hero-rect"><h1 style="color:#002147;">EPIDERMIX</h1></div>', unsafe_allow_html=True)
+    st.markdown(f"""<style>
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300&display=swap');
+.block-container {{ padding-top: 0rem !important; padding-left: 0rem !important; padding-right: 0rem !important; max-width: 100% !important; }}
+.stButton {{ display: flex; justify-content: center; margin-top: 30px; margin-bottom: 50px; }}
+div[data-testid="stButton"] > button {{ background-color: #002244; color: white; border-radius: 30px; padding: 15px 40px; font-size: 18px; font-weight: bold; border: none; }}
+div[data-testid="stButton"] > button:hover {{ background-color: #001122; color: white; border: none; }}
+</style>
+<div style="background-color: #fce4ec; padding: 120px 80px; margin-bottom: 80px; display: flex; align-items: center; justify-content: center; width: 100%; border-radius: 0;">
+    {logo_html}
+    <div style="display: flex; flex-direction: column; align-items: center; text-align: center;">
+        <h1 style="margin:0; font-size: 100px; font-family: 'Montserrat', sans-serif; font-weight: 300; letter-spacing: 10px; color: #111;">EPIDERMIX</h1>
+        <p style="margin:0; font-size: 24px; font-family: 'Montserrat', sans-serif; letter-spacing: 4px; color: #333; font-weight: 300;">INTELLIGENCE FOR YOUR SKIN'S EVOLUTION.</p>
+    </div>
+</div>""", unsafe_allow_html=True)
 
-    st.markdown('<div class="content-wrapper">', unsafe_allow_html=True)
+def render_footer():
+    st.markdown("---")
+    st.markdown(
+        "<div style='text-align: center; color: #888; font-family: Montserrat; font-size: 12px; margin-top: 50px; margin-bottom: 30px;'>"
+        "Epidermix Intelligence &copy; 2026 | "
+        "<a href='#' style='color: #888;'>Privacy Policy</a> | "
+        "<a href='#' style='color: #888;'>Terms of Service</a> | "
+        "<b>Medical Disclaimer:</b> For educational UI purposes only. Not professional medical advice."
+        "</div>", unsafe_allow_html=True
+    )
+
+def render_home():
+    render_sidebar()
+    render_banner()
     
-    # TOP CENTER BUTTON
-    if st.button(" ANALYSE YOUR SKIN NOW", key="top_analyse"):
-        st.session_state.page = 'mode_selection'
-        st.rerun()
-    
-    st.write("<br>", unsafe_allow_html=True)
-    st.header("The Ritual Guide")
-    
-    col1, col2, col3 = st.columns(3)
-    tips = [
-        ("Acne Management", "Prioritize a gentle cleanser and non-comedogenic moisturizer. Avoid picking spots to prevent scarring. Use targeted treatments like salicylic acid or benzoyl peroxide, and always apply SPF to protect healing skin.", get_base64_img("assets/acne.png")),
-        ("Pigment Correction", "Use vitamin C or niacinamide to brighten dark spots. Apply a high SPF daily to prevent further darkening. Incorporate chemical exfoliants like AHAs to promote skin cell turnover and even tone.", get_base64_img("assets/pigment.png")),
-        ("Barrier Recovery", "Stop all active ingredients like acids or retinoids. Use a fragrance-free, ceramide-rich moisturizer to restore lipids. Cleanse with lukewarm water and always apply SPF to protect the compromised skin barrier.", get_base64_img("assets/sunburn.png")),
-        ("Cellular Support", "Boost cellular health by eating antioxidant-rich foods like berries and leafy greens. Prioritize seven hours of sleep to allow natural repair, and use niacinamide or peptides to support skin regeneration.", get_base64_img("assets/antiaging.png")),
-        ("Lipid Replenishment", "Apply topical ceramides, fatty acids, and cholesterol to rebuild the moisture barrier. Use a rich, lipid-replenishing cream and avoid harsh cleansers to prevent stripping natural oils and maintain skin hydration.", get_base64_img("assets/dryness.png")),
-        ("Hypoallergenic Care", "Choose fragrance-free, hypoallergenic products with minimal ingredients to avoid irritation. Patch test new formulas and stick to calming agents like oat or thermal water to soothe and protect sensitive skin.", get_base64_img("assets/sensitive.png"))
-    ]
-
-    for i, (title, text, img_data) in enumerate(tips):
-        with [col1, col2, col3][i % 3]:
-            st.markdown(f"""
-                <div class="tip-container">
-                    <img src="{img_data}" class="tip-image">
-                    <div class="tip-overlay">
-                        <h3 style="color:white !important;">{title}</h3>
-                        <p style="color:white !important;">{text}</p>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-    st.write("<br>", unsafe_allow_html=True)
-    
-    # BOTTOM CENTER BUTTON
-    if st.button(" ANALYSE YOUR SKIN", key="bottom_analyse"):
-        st.session_state.page = 'mode_selection'
-        st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# --- 4. ENGINE MODES (HAM10000 Integration) ---
-elif st.session_state.page == 'mode_selection':
-    st.title("Select Analysis Method")
-    st.button(" Return to Home", on_click=lambda: setattr(st.session_state, 'page', 'home'))
-    m1, m2 = st.columns(2)
-    with m1:
-        st.subheader("1. Client Data Sync")
-        if st.button("Begin Client Sync"):
-            st.session_state.page = 'client_analysis'
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("ANALYSE SKIN NOW", key="btn_hero", use_container_width=True):
+            navigate_to("Analysis")
             st.rerun()
-    with m2:
-        st.subheader("2. AI Global Intelligence")
-        if st.button("Run AI Global Scan"):
-            st.session_state.page = 'ai_analysis'
+
+    st.markdown("<h3 style='padding-left: 40px;'>Ritual Guide</h3>", unsafe_allow_html=True)
+    try:
+        img_acne = get_base64_of_bin_file(get_image_path("skincare_botanical_serum"))
+        img_moist = get_base64_of_bin_file(get_image_path("skincare_moisturizer_marble"))
+        img_drop = get_base64_of_bin_file(get_image_path("skincare_serum_drop_leaf"))
+        img_cheek = get_base64_of_bin_file(get_image_path("skincare_application_cheek"))
+        img_aloe = get_base64_of_bin_file(get_image_path("skincare_aloe_vera_bottles"))
+        img_rose = get_base64_of_bin_file(get_image_path("skincare_rose_water_mist"))
+        
+        grid_html = f"""<style>
+.ritual-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 20px; margin-bottom: 40px; padding: 0 40px; }}
+.ritual-card {{ position: relative; border-radius: 12px; overflow: hidden; cursor: auto; aspect-ratio: 1; box-shadow: 0 4px 8px rgba(0,0,0,0.1); background-color: #fff; }}
+.ritual-card img {{ width: 100%; height: 100%; object-fit: cover; transition: transform 0.5s; }}
+.ritual-overlay {{ position: absolute; bottom: 0; left: 0; right: 0; top: 0; background: rgba(0,34,68,0.95); color: white; opacity: 0; transition: opacity 0.3s; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 20px; text-align: center; }}
+.ritual-card:hover .ritual-overlay {{ opacity: 1; }}
+.ritual-card:hover img {{ transform: scale(1.1); }}
+.overlay-title {{ font-size: 22px; font-weight: bold; margin-bottom: 10px; }}
+.overlay-text {{ font-size: 14px; line-height: 1.5; }}
+</style>
+<div class="ritual-grid">
+    <div class="ritual-card"><img src="data:image/png;base64,{img_acne}"><div class="ritual-overlay"><div class="overlay-title">Acne Management</div><div class="overlay-text">Prioritise a gentle cleanser and non-comedogenic moisturiser. Avoid picking spots to prevent scarring.</div></div></div>
+    <div class="ritual-card"><img src="data:image/png;base64,{img_moist}"><div class="ritual-overlay"><div class="overlay-title">Hydration First</div><div class="overlay-text">Apply moisturiser to damp skin to lock in hydration. Look for ingredients like ceramides.</div></div></div>
+    <div class="ritual-card"><img src="data:image/png;base64,{img_drop}"><div class="ritual-overlay"><div class="overlay-title">Active Serums</div><div class="overlay-text">Integrate powerful actives such as Vitamin C in the morning and Retinol at night.</div></div></div>
+    <div class="ritual-card"><img src="data:image/png;base64,{img_cheek}"><div class="ritual-overlay"><div class="overlay-title">Gentle Application</div><div class="overlay-text">Always apply skincare with upward, gentle strokes. Never pull down on your skin.</div></div></div>
+    <div class="ritual-card"><img src="data:image/png;base64,{img_aloe}"><div class="ritual-overlay"><div class="overlay-title">Natural Soothing</div><div class="overlay-text">Incorporate natural anti-inflammatories like Aloe Vera to calm redness.</div></div></div>
+    <div class="ritual-card"><img src="data:image/png;base64,{img_rose}"><div class="ritual-overlay"><div class="overlay-title">Refreshing Mists</div><div class="overlay-text">Use botanical toners or rose water throughout the day to rehydrate.</div></div></div>
+</div>"""
+        st.markdown(grid_html, unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Error loading images: {e}")
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("ANALYSE SKIN NOW", key="btn_footer", use_container_width=True):
+            navigate_to("Analysis")
             st.rerun()
 
-elif st.session_state.page == 'ai_analysis':
-    st.header("AI Global Intelligence Workspace")
-    st.button(" Back", on_click=lambda: setattr(st.session_state, 'page', 'mode_selection'))
-    f_ai = st.file_uploader("Scan for Dataset Matching", type=['jpg','png'])
-    if f_ai:
-        st.image(Image.open(f_ai), width=400)
-        if st.button(" Execute Neural Search"):
-            try:
-                df = pd.read_csv("data/HAM10000_metadata.csv")
-                dx_map = {'mel': 'Melanoma (High Risk)', 'nv': 'Common Mole', 'bcc': 'Basal Cell Carcinoma'}
-                res = df.sample(1).iloc[0]
-                diagnosis = dx_map.get(res['dx'], 'General Lesion Pattern')
-                st.success(f"Top Match Found: {diagnosis}")
-                if res['dx'] in ['mel', 'bcc']:
-                    st.error(" CLINICAL STATUS: Potential High Risk. Urgent specialist review recommended.")
+    render_footer()
+
+def render_analysis():
+    render_sidebar()
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("← Back to Home", use_container_width=True):
+            navigate_to("Home")
+            st.rerun()
+            
+    st.title("Epidermix AI Analysis")
+    st.markdown("Upload a close-up picture of an anomalous skin area, and Epidermix will initiate vision processing and check diagnostic matrices.")
+    st.markdown("---")
+    
+    st.warning("**Disclaimer**: Epidermix is for educational purposes only. Mock results should not replace professional medical diagnosis.")
+    
+    uploaded_file = st.file_uploader("Upload Skin Image", type=["jpg", "jpeg", "png"])
+    
+    if uploaded_file is not None:
+        try:
+            image = Image.open(uploaded_file)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.image(image, caption="Original Uploaded Source", use_container_width=True)
+            with c2:
+                augmented = iu.generate_mock_heatmap(image)
+                st.image(augmented, caption="Epidermix Vision Output (Heatmap Target)", use_container_width=True)
+            
+            st.markdown("---")
+            if st.button("EXECUTE ANALYSIS PROTOCOL", type="primary"):
+                result = analyse_skin_image(image)
+                
+                # DB Storage
+                if st.session_state.user and st.session_state.user != "Guest":
+                    db.save_scan(st.session_state.user, result["diagnosis"], result["confidence"], result["severity"])
+                
+                st.subheader("Diagnostic Results:")
+                res_c1, res_c2 = st.columns(2)
+                with res_c1:
+                    st.metric(label="Predicted Diagnosis", value=result["diagnosis"])
+                    st.metric(label="Severity Index", value=result["severity"])
+                with res_c2:
+                    st.metric(label="System Confidence", value=f"{result['confidence']}%")
+                
+                st.markdown("#### Detail Summary")
+                if result["status"] == "danger":
+                    st.error(result["description"])
+                    st.error(f"**Action Required**: {result['recommendation']}")
+                elif result["status"] == "warning":
+                    st.warning(result["description"])
+                    st.warning(f"**Recommendation**: {result['recommendation']}")
                 else:
-                    st.info(" CLINICAL STATUS: Benign Pattern. Continue routine monitoring.")
-            except:
-                st.error("Dataset not found. Ensure 'data/HAM10000_metadata.csv' exists.")
+                    st.success(result["description"])
+                    st.success(f"**Recommendation**: {result['recommendation']}")
+                
+                st.markdown("---")
+                pdf_path = generate_pdf_report(
+                    st.session_state.user, 
+                    result["diagnosis"], 
+                    result["confidence"], 
+                    result["severity"], 
+                    result["description"], 
+                    result["recommendation"]
+                )
+                
+                with open(pdf_path, "rb") as pdf_file:
+                    st.download_button(
+                        label="📄 Download Official System Report (PDF)",
+                        data=pdf_file,
+                        file_name="Epidermix_Report.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+        except Exception as e:
+            st.error(f"System Error: {e}")
+            
+    render_footer()
+
+def main():
+    if "page" not in st.session_state:
+        st.session_state.page = "Home"
+        
+    if st.session_state.page == "Home":
+        render_home()
+    elif st.session_state.page == "Analysis":
+        render_analysis()
+
+if __name__ == "__main__":
+    main()
