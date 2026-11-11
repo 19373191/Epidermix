@@ -12,8 +12,11 @@ import tempfile
 from transformers import pipeline
 
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+
 try:
-    page_icon_img = Image.open("d:/Study/A/epidermix/assets/logo.png")
+    page_icon_img = Image.open(os.path.join(ASSETS_DIR, "logo.png"))
 except Exception:
     page_icon_img = None
 
@@ -43,7 +46,7 @@ def get_base64_of_bin_file(bin_file):
     return base64.b64encode(data).decode()
 
 def get_image_path(pattern):
-    files = glob.glob(f"d:/Study/A/epidermix/assets/{pattern}*.png")
+    files = glob.glob(os.path.join(ASSETS_DIR, f"{pattern}*.png"))
     if not files:
         files = glob.glob(f"assets/{pattern}*.png")
     return files[0] if files else ""
@@ -208,7 +211,7 @@ def render_sidebar():
 
 def render_banner():
     try:
-        logo_b64 = get_base64_of_bin_file("d:/Study/A/epidermix/assets/logo.png")
+        logo_b64 = get_base64_of_bin_file(os.path.join(ASSETS_DIR, "logo.png"))
         logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="width: 200px; margin-right: 60px;" />'
     except Exception:
         logo_html = '''<div style="margin-right: 60px; width: 200px;"><svg viewBox="0 0 100 100" fill="none" stroke="#111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M60 20 L20 50 L40 80 L70 50 Z" /><circle cx="60" cy="20" r="5" fill="#111" /><circle cx="20" cy="50" r="5" fill="#111" /><circle cx="40" cy="80" r="5" fill="#111" /><circle cx="70" cy="50" r="5" fill="#111" /><path d="M40 50 L60 20 M40 50 L20 50 M40 50 L40 80 M40 50 L70 50" stroke-width="1" /><circle cx="40" cy="50" r="3" fill="#111" /><path d="M70 50 C 90 50, 90 90, 60 90 L30 90" /><rect x="25" y="65" width="20" height="8" rx="2" /></svg></div>'''
@@ -297,7 +300,7 @@ def render_analysis():
             navigate_to("Home")
             st.rerun()
             
-    st.title("Epidermix AI Analysis")
+    st.title("Epidermix AI Analysis Matrix")
     st.markdown("Upload a close-up picture of an anomalous skin area, and Epidermix will initiate vision processing and check diagnostic matrices.")
     st.markdown("---")
     
