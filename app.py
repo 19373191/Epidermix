@@ -15,7 +15,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 try:
-    page_icon_img = Image.open(os.path.join(ASSETS_DIR, "logo.png"))
+    page_icon_img = Image.open(os.path.join(ASSETS_DIR, "logo.png")).resize((64, 64))
 except Exception:
     page_icon_img = None
 
@@ -122,7 +122,12 @@ label_map = {
 @st.cache_resource
 def load_hf_model():
     from transformers import pipeline
-    return pipeline("image-classification", model="Anwarkh1/Skin_Cancer-Image_Classification")
+    return pipeline(
+        "image-classification",
+        model="Anwarkh1/Skin_Cancer-Image_Classification",
+        model_kwargs={"low_cpu_mem_usage": True},
+        dtype="float16"
+    )
 
 def analyse_skin_image(image):
     st.info("Initiating local scan using Vision Transformer Neural Network. (First run downloads weights)...")
