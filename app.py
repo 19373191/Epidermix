@@ -9,7 +9,6 @@ import database as db
 import image_utils as iu
 from fpdf import FPDF
 import tempfile
-from transformers import pipeline
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +39,7 @@ def logout():
     st.session_state.user = "Guest"
     st.rerun()
 
+@st.cache_data
 def get_base64_of_bin_file(bin_file):
     with open(bin_file, 'rb') as f:
         data = f.read()
@@ -121,6 +121,7 @@ label_map = {
 
 @st.cache_resource
 def load_hf_model():
+    from transformers import pipeline
     return pipeline("image-classification", model="Anwarkh1/Skin_Cancer-Image_Classification")
 
 def analyse_skin_image(image):
