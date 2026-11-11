@@ -119,26 +119,43 @@ label_map = {
     }
 }
 
+ID2LABEL = {
+    0: 'benign_keratosis-like_lesions',
+    1: 'basal_cell_carcinoma',
+    2: 'actinic_keratoses',
+    3: 'vascular_lesions',
+    4: 'melanocytic_Nevi',
+    5: 'melanoma',
+    6: 'dermatofibroma'
+}
+
 @st.cache_resource
 def load_hf_model():
-    from transformers import pipeline
-    return pipeline(
-        "image-classification",
-        model="Anwarkh1/Skin_Cancer-Image_Classification",
-        model_kwargs={"low_cpu_mem_usage": True},
-        dtype="float16"
-    )
+    import onnxruntime as ort
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = 1
+    opts.inter_op_num_threads = 1
+    opts.enable_cpu_mem_arena = False
+    model_path = os.path.join(BASE_DIR, "skin_cancer_int8.onnx")
+    return ort.InferenceSession(model_path, sess_options=opts, providers=["CPUExecutionProvider"])
 
 def analyse_skin_image(image):
-    st.info("Initiating local scan using Vision Transformer Neural Network. (First run downloads weights)...")
+    st.info("Initiating local scan using Vision Transformer Neural Network...")
     
     try:
-        classifier = load_hf_model()
-        results = classifier(image)
+        import numpy as np
+        session = load_hf_model()
+        img_rgb = image.convert("RGB").resize((224, 224), Image.BILINEAR)
+        arr = (np.asarray(img_rgb, dtype=np.float32) / 255.0 - 0.5) / 0.5
+        pixel_values = np.transpose(arr, (2, 0, 1))[np.newaxis, ...]
         
-        best_prediction = results[0]
-        label = best_prediction["label"]
-        score = best_prediction["score"]
+        logits = session.run(None, {"pixel_values": pixel_values})[0][0]
+        probs = np.exp(logits - np.max(logits))
+        probs = probs / probs.sum()
+        
+        best_idx = int(np.argmax(probs))
+        label = ID2LABEL[best_idx]
+        score = float(probs[best_idx])
         
         mapping = label_map.get(label, {
             "severity": "Unknown",

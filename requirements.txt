@@ -1,8 +1,6 @@
---extra-index-url https://download.pytorch.org/whl/cpu
 streamlit
 pillow
 opencv-python-headless
 fpdf2
-transformers
-torch
-torchvision
+numpy
+onnxruntime
